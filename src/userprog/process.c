@@ -28,79 +28,163 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
+
+
   char *fn_copy;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
+  /* Facem o copie a lui FILE_NAME.
+     In caz contrar va fi o cursa intre apelant si incarcare " load() ". */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  /* Creeam un nou fir de executie pentru FILE_NAME. */
+  // tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  
+  // ---Solutie---
+  /* Separam FILE_NAME in 2 parti --  
+     argv0 pentru filename,iar save_ptr pentru celelalte argumente  */
+  char *argv0, *save_ptr;
+  argv0 = strtok_r(fn_copy, " ", &save_ptr);
+  tid = thread_create (argv0, thread_current()->priority,
+   start_process, save_ptr);
+  
+  /*Procesul parinte trebuie sa astepte pana cand va sti daca 
+   procesul fiu a incarcat cu succes executabilul sau.*/
+  sema_down(&thread_current()->process_wait);
+  // ---Solutie---
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
-  return tid;
+  // return tid;
+  // ---Solutie---
+  return thread_current()->child_load_status;
+  // ---Solutie---
 }
 
-/* A thread function that loads a user process and starts it
-   running. */
+/* Functie a firului de executie "thread" care incarca un proces al
+ utilizatorului si incepe sa il ruleze*/
 static void
-start_process (void *file_name_)
+start_process (void *args_)
 {
-  char *file_name = file_name_;
+  char * args = args_;
   struct intr_frame if_;
   bool success;
 
-  /* Initialize interrupt frame and load executable. */
+  /* Initializeaza cadrul de intrerupere si sarcina executabila. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (args, &if_.eip, &if_.esp);
 
-  /* If load failed, quit. */
-  palloc_free_page (file_name);
+  // ---Solutie---
+  palloc_free_page(pg_round_down(args));
+
+  /* Daca incarcarea nu reuseste, setam load_status -1 si iesim. */
   if (!success) 
-    thread_exit ();
+  {
+    if (thread_current()->parent != NULL)
+      thread_current()->parent->child_load_status = -1;
+    thread_exit();
+  }
 
-  /* Start the user process by simulating a return from an
-     interrupt, implemented by intr_exit (in
-     threads/intr-stubs.S).  Because intr_exit takes all of its
-     arguments on the stack in the form of a `struct intr_frame',
-     we just point the stack pointer (%esp) to our stack frame
-     and jump to it. */
+  /* Daca incarcarea reuseste, parintele nu mai asteapta,
+     iar firul de executie fiu intra in asteptare pentru parintele lui. */
+  sema_up(&thread_current()->parent->process_wait);
+  sema_down(&thread_current()->process_wait);
+  /* Ne asiguram ca executabilul procesului care ruleaza nu poate fi modificat. */
+  thread_current()->file = filesys_open (thread_name());
+  file_deny_write(thread_current()->file);
+  // ---Solutie---
+
+  /* Pornim user process prin simularea unei returnari
+     de la intrerupere, implementata de intr_exit (in
+     threads/intr-stubs.S).  Deoarece intr_exit ia toate argumentele
+     sale de pe stiva sub forma de `struct intr_frame',
+     o sa indicam indicatorul stivei (%esp) din cadrul stivei noastre
+     si sarim la aceasta. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
 
-/* Waits for thread TID to die and returns its exit status.  If
-   it was terminated by the kernel (i.e. killed due to an
-   exception), returns -1.  If TID is invalid or if it was not a
-   child of the calling process, or if process_wait() has already
-   been successfully called for the given TID, returns -1
-   immediately, without waiting.
+/* Asteapta pentru firul de executie TID sa sfarseasca si returneaza
+   statusul de iesire al acestuia.  Daca a fost terminat de catre kernel
+   (exemplu : killed due to an exception), returneaza -1.
+   Daca TID este invalid sau daca nu a fost un fiu
+   al procesului de apelare, sau daca process_wait() a fost deja
+   apelat cu succes pentru TID dat, returneaza -1 imediat fara a mai astepta.
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+  //---Solutie---
+  int status = -1;
+  struct list_elem *e;
+  struct thread *cur = thread_current();
+
+  /* child_tid ar trebuii sa fie fiul sau direct.*/
+  struct thread *child = NULL;
+  for (e = list_begin (&cur->children); e != list_end (&cur->children);
+     e = list_next (e))
+  {
+    struct thread *tmp = list_entry (e, struct thread, child_elem);
+    if (tmp->tid == child_tid)
+    {
+      child = tmp;
+      break;
+    }
+  }
+
+  /* Daca procesul child_tid este fiul lui, il lasam sa astepte pentru fiul sau. */
+  if (child != NULL) {
+    // Ordinea este importanta !!!!
+    sema_up(&child->process_wait);
+    sema_down(&cur->process_wait);   
+    status = cur->child_exit_status;
+  }
+  
+  return status;
+  // ---Solutie---
 }
 
-/* Free the current process's resources. */
+/* Eliberam resursele procesului curent. */
 void
 process_exit (void)
 {
+
   struct thread *cur = thread_current ();
-  uint32_t *pd;
+
+  // ---Solutie---
+  /* Deal with its parent --
+     Daca parintele sau inca asteapta dupa acesta,
+     se sterge in mod automat din lista de fii ai parintelui
+     iar asteptarea parintelui se opreste. */
+  if (cur->parent != NULL)
+  {
+    list_remove(&cur->child_elem);
+    sema_up(&cur->parent->process_wait);
+
+  }
+
+  /* Deal with its chidren --
+     Opreste toate asteptarile fiilor. */
+  struct list_elem *e;
+  for (e = list_begin (&cur->children); e != list_end (&cur->children);
+     e = list_next (e))
+  {
+    struct thread *tmp = list_entry (e, struct thread, child_elem);
+    sema_up(&tmp->process_wait);
+  }
+  // ---Solutie---
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
-  pd = cur->pagedir;
+  uint32_t *pd = cur->pagedir;
   if (pd != NULL) 
     {
       /* Correct ordering here is crucial.  We must set
@@ -195,7 +279,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, const char *args);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -206,8 +290,9 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const char *args, void (**eip) (void), void **esp) 
 {
+  // printf("haha_load\n");
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -222,6 +307,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
+  const char *file_name = thread_name();
   file = filesys_open (file_name);
   if (file == NULL) 
     {
@@ -302,7 +388,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, args))
     goto done;
 
   /* Start address. */
@@ -424,10 +510,105 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+// ---Solutie---
+/* Inseram adresa argumenteleor in lista. */
+struct argument_addr
+{
+  struct list_elem list_elem;
+  uint32_t addr;
+};
+
+// ---Solutie---
+/* Impinge un argument in stiva si apoi impinge addresa acestuia in lista */
+void push_argument_(void **esp, const char *arg, struct list *list) 
+{
+  int len = strlen(arg) + 1;
+  *esp -= len;
+
+  struct argument_addr *addr = malloc(sizeof(struct argument_addr));
+  memcpy(*esp, arg, len);
+
+  addr->addr = *esp;
+  // error -- list_push_back(&list, &addr->list_elem);
+  list_push_back(list, &addr->list_elem);
+}
+
+// ---Solutie---
+/* Baga toate argumentele in stiva.
+   Asa arata stiva noastra:
+    |  0          | <-- stack pointer
+    |  argc       |
+    |  argv       |
+    |  argv[0]    |
+    |  argv[1]    | 
+    |  argv[2]    |
+    |  null       | (sentinel)
+    |  argument2  | 
+    |  argument1  |
+    |  argument0  | (filename)  
+   */
+void push_arguments(void **esp, const char *args) 
+{
+  struct list list;
+  list_init (&list);
+
+  *esp = PHYS_BASE; 
+  uint32_t arg_num = 1;
+
+  /* Impinge filename in stiva. */
+  const char *arg = thread_name();
+  push_argument_(esp, arg, &list);
+
+  /* Impinge celelate argumente in stiva. */
+  char *token, *save_ptr;
+  for (token = strtok_r(args, " ", &save_ptr); 
+    token != NULL;
+    token = strtok_r(NULL, " ", &save_ptr))
+  {
+    arg_num += 1;
+    push_argument_(esp, token, &list);
+  }
+
+  /* Seteaza alinierea. */
+  int total = PHYS_BASE - *esp;
+  *esp = *esp - (4 - total % 4) - 4;
+
+  /* Impinge pointerul santinela nul. */
+  *esp -= 4;
+  // error : * (uint32_t *) esp = (uint32_t) NULL;
+  * (uint32_t *) *esp = (uint32_t) NULL;
+
+  /* Impinge toate adresele argumentelor in stiva.
+     Adresele fiind scoase din lista. */
+  while (!list_empty(&list)) {
+    struct argument_addr *addr = 
+      list_entry(list_pop_back(&list), struct argument_addr, list_elem);
+    *esp -= 4;
+    * (uint32_t *) *esp = addr->addr;
+    // hex_dump(*esp, *esp, 64, true);
+    // printf("%x\n", addr->addr);
+  }
+
+  /* Impinge argv -- prima adresa a argumentului. */
+  *esp -= 4;
+  * (uint32_t *) *esp = (uint32_t *)(*esp + 4);
+
+  /* Impinge argc -- numarul total de argumente. */
+  *esp -= 4;
+  * (uint32_t *) *esp = arg_num;
+
+  /* Impinge 0 ca find o adresa de returnare falsa. */
+  *esp -= 4;
+  * (uint32_t *) *esp = 0x0;
+
+  // hex_dump(*esp, *esp, 64, true);
+  // hex_dump(PHYS_BASE - 64, PHYS_BASE - 64, 64, true);
+}
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, const char *args) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -436,13 +617,23 @@ setup_stack (void **esp)
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
+      if (success) 
+      {
         *esp = PHYS_BASE;
+
+        // ---Solutie---
+        push_arguments(esp, args);
+        // hex_dump(0, PHYS_BASE - 12, 64, true);
+        // printf("%x\n", PHYS_BASE - 12);
+        // ---Solutie---
+      }
+        
       else
         palloc_free_page (kpage);
     }
   return success;
 }
+
 
 /* Adds a mapping from user virtual address UPAGE to kernel
    virtual address KPAGE to the page table.

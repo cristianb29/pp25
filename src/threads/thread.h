@@ -1,10 +1,14 @@
 #ifndef THREADS_THREAD_H
 #define THREADS_THREAD_H
 
+// add
+#include "threads/fixed-point.h"
+#include "threads/synch.h"
+
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-#include "fixed_point.h"
+
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -24,9 +28,8 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-
+// #define PRI_MAX 630
 /* A kernel thread or user process.
-
    Each thread structure is stored in its own 4 kB page.  The
    thread structure itself sits at the very bottom of the page
    (at offset 0).  The rest of the page is reserved for the
@@ -89,36 +92,46 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    struct list_elem allelem;           /* List element for all threads
-	                                       list. */
+    struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+    // ---Solutie---
+    int64_t sleep_until;                /* End timestamp of sleep*/
+    int original_priority;   
+    struct lock *locked_by;
+    struct list threads_locked;
+    struct list_elem donate_elem;
+
+    // // add
+    // /* Variables needed for calculating priority of threads. */ 
+    // int nice;                            Nice value. 
+    // fixed_point recent_cpu;             /* Recent CPU value. */
+    // fixed_point load_avg;               /* Load_average value. */
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+
+    // ---Solutie---
+    struct thread *parent;              /* Which thread creates this one. */
+    
+    struct list children;               /* Threads that this one creates. */
+    struct list_elem child_elem;        /* List element for list children. */
+    int child_load_status;              /* Load status of its child*/
+    int child_exit_status;              /* Exit status of its child*/ 
+    
+    struct list open_fd;                /* Fds the thread opens*/
+    struct file *file;                  /* Executable file of this thread. */
+    
+    struct semaphore process_wait;      /* Determine whether thread should wait. */
+    // ---Solutie---
+
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
-    
-	/* Owned by thread.c. */
-	struct list_elem sleepelem;         /* List element for sleeping
-	                                       threads. */
-	int64_t remaining_time_to_wake_up;  /* Ticks remaining from waking up. */
-	
-	/* Owned by thread.c and synch.c. */
-	int real_priority;                  /* Real priority while being
-	                                       donated. */
-	struct list locks_held;             /* All locks held. */
-	struct lock *current_lock;          /* The thread been locked by this
-	                                       lock. */
-	
-	/* Owned by thread.c and synch.c. */
-	int nice;                           /* Determines how nice a thread should
-	                                       be to other threads. */
-	fixed_t recent_cpu;                 /* The recent cpu. */
   };
 
 /* If false (default), use round-robin scheduler.
@@ -126,10 +139,15 @@ struct thread
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
+// ---Solutie---
+bool cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
+bool cmp_donate (const struct list_elem *a, const struct list_elem *b, void *aux);
+void check_priority(void);
+
 void thread_init (void);
 void thread_start (void);
 
-void thread_tick (void);
+void thread_tick (int64_t current_ticks);
 void thread_print_stats (void);
 
 typedef void thread_func (void *aux);
@@ -138,12 +156,16 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
+// ---Solutie---
+void thread_sleep_until (int64_t sleep_until);
+
 struct thread *thread_current (void);
 tid_t thread_tid (void);
 const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
+void thread_yield__ (struct thread*);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
@@ -152,23 +174,15 @@ void thread_foreach (thread_action_func *, void *);
 int thread_get_priority (void);
 void thread_set_priority (int);
 
-int thread_get_nice (void);
-void thread_set_nice (int);
-int thread_get_recent_cpu (void);
-int thread_get_load_avg (void);
+// int thread_get_nice (void);
+// void thread_set_nice (int);
+// int thread_get_recent_cpu (void);
+// int thread_get_load_avg (void);
 
-void thread_set_sleeping (int64_t);
+// ---Solutie---
+void donation_acquire(void);
+void donation_release(void);
 
-void try_thread_yield (void);
-
-bool compare_threads_by_priority (const struct list_elem *,
-                                  const struct list_elem *,
-                                  void *);
-
-void thread_update_priority (struct thread *);
-
-void thread_ready_rearrange (struct thread *);
-
-void thread_tick_one_second (void);
 
 #endif /* threads/thread.h */
+

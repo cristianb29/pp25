@@ -4,44 +4,38 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/syscall.h"
 
-/* Number of page faults processed. */
+/* Numar de defectiuni pe pagina procesate. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
 
-/* Registers handlers for interrupts that can be caused by user
-   programs.
+/* Registrele de manipulare pentru intreruperi care pot fi cauzate 
+   programele utilizatorului
 
-   In a real Unix-like OS, most of these interrupts would be
-   passed along to the user process in the form of signals, as
-   described in [SV-386] 3-24 and 3-25, but we don't implement
-   signals.  Instead, we'll make them simply kill the user
-   process.
+   Intr-un sistem de operare de tip UNIX,majoritate acelor intreruperi
+   ar fi transmise catre procesele utilizatorului in forma semnale,
+   dar nu implementam semnale. In schimb, vom face sa termine sfarseasca 
+   utilizatorului. 
 
-   Page faults are an exception.  Here they are treated the same
-   way as other exceptions, but this will need to change to
-   implement virtual memory.
-
-   Refer to [IA32-v3a] section 5.15 "Exception and Interrupt
-   Reference" for a description of each of these exceptions. */
+   Defectiunile pagini sunt o exceptie.  Aici sunt tratate asemanator 
+   celorlalte exceptii, dar asta trebuie sa se schimbe ca sa implementam
+   memoria virtuala. */
 void
 exception_init (void) 
 {
-  /* These exceptions can be raised explicitly by a user program,
-     e.g. via the INT, INT3, INTO, and BOUND instructions.  Thus,
-     we set DPL==3, meaning that user programs are allowed to
-     invoke them via these instructions. */
+  /* Acete exceptii pot fi ridicate explicit de un program al utilizatorului,
+     un exemplu ar fi folosind INT, INT3, INTO, si instructiuni BOUND.  
   intr_register_int (3, 3, INTR_ON, kill, "#BP Breakpoint Exception");
   intr_register_int (4, 3, INTR_ON, kill, "#OF Overflow Exception");
   intr_register_int (5, 3, INTR_ON, kill,
                      "#BR BOUND Range Exceeded Exception");
 
-  /* These exceptions have DPL==0, preventing user processes from
-     invoking them via the INT instruction.  They can still be
-     caused indirectly, e.g. #DE can be caused by dividing by
-     0.  */
+  /* Aceste exceptii au DPL==0, care previn invocarea proceselor utilizatorului
+     folosind insctructiunea INT. Dar ele tot pot fi cauzate in mod indirect,
+     de exemplu impartind #DE la 0;  */
   intr_register_int (0, 0, INTR_ON, kill, "#DE Divide Error");
   intr_register_int (1, 0, INTR_ON, kill, "#DB Debug Exception");
   intr_register_int (6, 0, INTR_ON, kill, "#UD Invalid Opcode Exception");
@@ -54,71 +48,58 @@ exception_init (void)
   intr_register_int (19, 0, INTR_ON, kill,
                      "#XF SIMD Floating-Point Exception");
 
-  /* Most exceptions can be handled with interrupts turned on.
-     We need to disable interrupts for page faults because the
-     fault address is stored in CR2 and needs to be preserved. */
+  /* Majoritatea exceptiilor pot fi manipulate cu optiunea de intreruperi.
+     Trebuie sa dezactivam aceasta optiune pentru defectiunile paginilor,
+     deoarece defectiunile adreselor sunt stocate in CR2 si trebuie prezervate. */
   intr_register_int (14, 0, INTR_OFF, page_fault, "#PF Page-Fault Exception");
 }
 
-/* Prints exception statistics. */
+/* Afiseaza statistica exceptiilor. */
 void
 exception_print_stats (void) 
 {
   printf ("Exception: %lld page faults\n", page_fault_cnt);
 }
 
-/* Handler for an exception (probably) caused by a user process. */
+/* Manipulator de exceptie cauzat de un program de utilizator. */
 static void
 kill (struct intr_frame *f) 
 {
-  /* This interrupt is one (probably) caused by a user process.
-     For example, the process might have tried to access unmapped
-     virtual memory (a page fault).  For now, we simply kill the
-     user process.  Later, we'll want to handle page faults in
-     the kernel.  Real Unix-like operating systems pass most
-     exceptions back to the process via signals, but we don't
-     implement them. */
+  /* Aceasta intrerupere este cauzata de un proces de utilizator.
+     Pentru moment, trebuie sa incetam procesul utilizatorului.
+     Pe urma, vom manipula defectiunile paginilor in kernel.
+     Sistemele de operare de tip UNIX trec aproape peste fiecare
+     exceptie spre procese prin semnale, dar nu le implementam. */
      
-  /* The interrupt frame's code segment value tells us where the
-     exception originated. */
+  /* Valoarea segmentului de cod al cadrului de intreruperene spune unde exceptia a luat loc */
   switch (f->cs)
     {
     case SEL_UCSEG:
-      /* User's code segment, so it's a user exception, as we
-         expected.  Kill the user process.  */
+      /* Segmentul de cod al utilizatorului, este o super-exceptie.
+         Incetam procesul utilizatorului.  */
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
       thread_exit (); 
 
     case SEL_KCSEG:
-      /* Kernel's code segment, which indicates a kernel bug.
-         Kernel code shouldn't throw exceptions.  (Page faults
-         may cause kernel exceptions--but they shouldn't arrive
-         here.)  Panic the kernel to make the point.  */
+      /* Segmentul de cod Kernel,care indica un bug kernel.
+         Codul kernel nu ar trebui sa aiba exceptii.    */
       intr_dump_frame (f);
       PANIC ("Kernel bug - unexpected interrupt in kernel"); 
 
     default:
-      /* Some other code segment?  Shouldn't happen.  Panic the
-         kernel. */
+      
       printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
              f->vec_no, intr_name (f->vec_no), f->cs);
       thread_exit ();
     }
 }
 
-/* Page fault handler.  This is a skeleton that must be filled in
-   to implement virtual memory.  Some solutions to project 2 may
-   also require modifying this code.
+/* Manipulator de defectiuni a paginii.  Este un schelet care trebuie completat pentru
+   implementarea memoriei virtuale.
 
-   At entry, the address that faulted is in CR2 (Control Register
-   2) and information about the fault, formatted as described in
-   the PF_* macros in exception.h, is in F's error_code member.  The
-   example code here shows how to parse that information.  You
-   can find more information about both of these in the
-   description of "Interrupt 14--Page Fault Exception (#PF)" in
-   [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
+   Urmatorul exemplu de cod ne arata cum analizam informatia.  */
 static void
 page_fault (struct intr_frame *f) 
 {
@@ -127,30 +108,35 @@ page_fault (struct intr_frame *f)
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
 
-  /* Obtain faulting address, the virtual address that was
-     accessed to cause the fault.  It may point to code or to
-     data.  It is not necessarily the address of the instruction
-     that caused the fault (that's f->eip).
-     See [IA32-v2a] "MOV--Move to/from Control Registers" and
-     [IA32-v3a] 5.15 "Interrupt 14--Page Fault Exception
-     (#PF)". */
+  /* Optinem adrese de defectare, adresa virtuala care a fost accesata din 
+     cauza defectiunilor. Nu e necesara adresa insctructiuniii care a cauzat 
+     defectiunea.. */
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
 
-  /* Turn interrupts back on (they were only off so that we could
-     be assured of reading CR2 before it changed). */
+  /* Pornim din nou intreruperile (au fost oprite doar pentru a ne asigura
+     de citirea CR2-ului inainte ca acesta sa se schimbe). */
   intr_enable ();
 
-  /* Count page faults. */
+  /* Numaram defectiunile paginii. */
   page_fault_cnt++;
 
-  /* Determine cause. */
+  //------- Solutie------
+  if (!not_present)
+    exit(-1);
+
+  if (fault_addr == NULL || !is_user_vaddr(fault_addr) 
+    || !pagedir_get_page(thread_current()->pagedir, fault_addr))
+    exit(-1);
+  //------- Solutie------
+
+
+  /* Determinam cauza. */
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
+  /* Pentru a implementa memoria virtuala, stergem restul functiei body-ului si o 
+     inlocuim cu codul care ne aduce pagina care se refera la fault_addr. */
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",

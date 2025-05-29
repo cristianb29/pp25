@@ -32,7 +32,6 @@ file_open (struct inode *inode)
       return NULL; 
     }
 }
-
 /* Opens and returns a new file for the same inode as FILE.
    Returns a null pointer if unsuccessful. */
 struct file *
@@ -52,7 +51,6 @@ file_close (struct file *file)
       free (file); 
     }
 }
-
 /* Returns the inode encapsulated by FILE. */
 struct inode *
 file_get_inode (struct file *file) 
